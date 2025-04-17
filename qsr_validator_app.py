@@ -9,10 +9,7 @@ from cd_parser import extract_c_and_d_data
 st.set_page_config(page_title="QSR Validator", layout="wide")
 st.title("ECIP QSR Side-by-Side Validator")
 
-st.markdown("Upload individual QSR Excel files (Schedule B for Q1–Q4) below:")
-
-uploaded_files = st.file_uploader("Quarterly QSR Excel Files", type="xlsx", accept_multiple_files=True)
-
+# ====== SCHEDULE B EXTRACTION ======
 def extract_sch_b(file, ec_number):
     try:
         df = pd.read_excel(file, sheet_name="Sch B", header=None)
@@ -54,8 +51,15 @@ def extract_sch_b(file, ec_number):
         st.warning(f"Failed to process EC{ec_number} — {e}")
         return None
 
+# ====== INITIALIZE DATA STRUCTURES ======
 ec_data = defaultdict(lambda: pd.Series())
+cd_data = {}
 bank_names = {}
+validation_summary = []
+
+# ====== UPLOAD SCH B FILES ======
+st.markdown("### Upload Quarterly QSR files (Schedules A & B only)")
+uploaded_files = st.file_uploader("Upload Schedule B Files (Q1–Q4)", type="xlsx", accept_multiple_files=True)
 
 if uploaded_files:
     for file in uploaded_files:
@@ -70,40 +74,56 @@ if uploaded_files:
                 ec_data[ec_num] = ec_data[ec_num].add(extracted, fill_value=0)
                 bank_names[ec_num] = bank_name
 
-    if ec_data:
-        selected_ec = st.sidebar.selectbox("Choose EC to view", list(ec_data.keys()))
-        st.subheader(f"{bank_names.get(selected_ec, f'EC{selected_ec}')} – Schedule B Totals (Q1–Q4)")
-        st.dataframe(ec_data[selected_ec].reset_index().rename(columns={"index": "Category", 0: "Value"}))
-
+# ====== UPLOAD SCH C & D FILES ======
 st.markdown("---")
-st.markdown("Upload your Annual QSR files with Schedule C and D data:")
-
-annual_files = st.file_uploader("Annual QSR Excel Files", type="xlsx", accept_multiple_files=True, key="annual")
-cd_data = {}
+st.markdown("### Upload Annual QSR files (Schedules C & D only)")
+annual_files = st.file_uploader("Upload Annual C&D Files", type="xlsx", accept_multiple_files=True, key="annual")
 
 if annual_files:
     for file in annual_files:
         match = re.search(r'EC[-_]?(\d+)', file.name)
-        bank_match = re.search(r'_2024[_\s]*Annual[_\s]*(.*)\.xlsx', file.name)
+        bank_match = re.search(r'_2024[_\s]*(Annual)?[_\s]*(.*)\.xlsx', file.name)
         if match:
             ec = match.group(1).zfill(4)
-            bank_name = bank_match.group(1).replace("_", " ").strip() if bank_match else f"EC{ec}"
+            bank_name = bank_match.group(2).replace("_", " ").strip() if bank_match else f"EC{ec}"
             extracted = extract_c_and_d_data(file)
             if extracted:
                 cd_data[ec] = pd.Series(extracted)
                 bank_names[ec] = bank_name
 
-    if selected_ec in ec_data and selected_ec in cd_data:
-        st.markdown(f"Schedule B vs C&D Comparison for {bank_names.get(selected_ec)}")
-        df_b = ec_data[selected_ec]
-        df_cd = cd_data[selected_ec]
-        combined = pd.DataFrame({
-            "Schedule B Total": df_b,
-            "Schedule C & D Total": df_cd,
-        })
-        combined["Difference"] = combined["Schedule B Total"] - combined["Schedule C & D Total"]
-        st.dataframe(combined.fillna(0).round(2))
+# ====== SHOW COMPARISON PER EC ======
+if ec_data and cd_data:
+    selected_ec = st.sidebar.selectbox("Choose a bank to view", sorted(ec_data.keys()))
+    bank_label = bank_names.get(selected_ec, f"EC{selected_ec}")
+    st.subheader(f"{bank_label} – Side-by-Side Comparison")
 
+    df_b = ec_data[selected_ec]
+    df_cd = cd_data.get(selected_ec, pd.Series())
+    comparison = pd.DataFrame({
+        "Schedule B Total": df_b,
+        "Schedule C & D Total": df_cd,
+    })
+    comparison["Difference"] = comparison["Schedule B Total"] - comparison["Schedule C & D Total"]
+    st.dataframe(comparison.fillna(0).round(2))
+
+# ====== VALIDATION SUMMARY ======
+st.markdown("---")
+st.markdown("### Validation Matrix (All Banks with B + C&D data)")
+
+for ec_num in sorted(ec_data.keys()):
+    if ec_num in cd_data:
+        df_b = ec_data[ec_num]
+        df_cd = cd_data[ec_num]
+        diff = (df_b - df_cd).fillna(0)
+        has_issues = (diff.abs() > 1).any()
+        validation_summary.append({
+            "Bank": bank_names.get(ec_num, f"EC{ec_num}"),
+            "Has Issues": "Yes" if has_issues else "No"
+        })
+
+if validation_summary:
+    df_matrix = pd.DataFrame(validation_summary)
+    st.dataframe(df_matrix, use_container_width=True)
 
 
 # cd C:\Users\SavannahSummers\Downloads\ecip-helper
